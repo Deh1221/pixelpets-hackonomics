@@ -82,7 +82,7 @@ export async function generateAIQuestion(type: AIRequestType = 'trivia'): Promis
   // Get topic preference
   const topicId = getQuestionTopic();
   const customTopic = getCustomTopic();
-  
+
   let category: string;
   if (topicId === 'custom' && customTopic) {
     category = customTopic;
@@ -91,11 +91,16 @@ export async function generateAIQuestion(type: AIRequestType = 'trivia'): Promis
     category = topic?.value || QUESTION_TOPICS[0].value;
   }
 
+  // If offline, instantly fallback without doing a 10s timeout
+  if (!navigator.onLine) {
+    return null;
+  }
+
   // Try direct API call first (if key is configured in .env)
   if (GEMINI_API_KEY) {
     return await generateDirectWithRotation(category, type);
   }
-  
+
   // Fallback to Supabase Edge Function
   return await generateViaSupabase(category, type);
 }
@@ -119,33 +124,33 @@ async function generateDirectWithRotation(category: string, type: AIRequestType)
   }
 
   const startIndex = currentModelIndex;
-  
+
   for (let i = 0; i < GEMINI_MODELS.length; i++) {
     const modelIndex = (startIndex + i) % GEMINI_MODELS.length;
     const model = GEMINI_MODELS[modelIndex];
-    
+
     // Skip if we just tried this model
     if (model === lastWorkingModel) continue;
-    
+
     console.log(`Trying model: ${model}`);
-    
+
     const result = await tryGenerateWithModel(model, category, type);
-    
+
     if (result.success && result.data) {
       // Rotate to next model for next request & persist this working model
       currentModelIndex = (modelIndex + 1) % GEMINI_MODELS.length;
       setLastWorkingModel(model);
       return { ...result.data, generatedBy: model };
     }
-    
+
     if (result.status === 429) {
       console.log(`${model} rate limited, trying next...`);
       continue;
     }
-    
+
     console.log(`${model} failed with status ${result.status}, trying next...`);
   }
-  
+
   // All models failed, try Supabase fallback
   console.log('All models exhausted, trying Supabase fallback...');
   return await generateViaSupabase(category, type);
@@ -166,14 +171,14 @@ export function setDifficulty(diff: Difficulty): void {
  * Try to generate with a specific model
  */
 async function tryGenerateWithModel(
-  model: string, 
+  model: string,
   category: string,
   type: AIRequestType
 ): Promise<{ success: boolean; data?: MiniGame; status?: number }> {
   try {
     let prompt = "";
     const difficulty = getDifficulty();
-    
+
     // Difficulty Strings
     const levelDesc = {
       easy: "very simple, beginner-level, clear and easy to understand",
@@ -182,7 +187,7 @@ async function tryGenerateWithModel(
     };
 
     if (type === 'budget_puzzle') {
-       prompt = `Generate a creative "${difficulty}" difficulty "Budget Puzzle" scenario about ${category}. 
+      prompt = `Generate a creative "${difficulty}" difficulty "Budget Puzzle" scenario about ${category}. 
         User has a Total Budget. Provide a list of items (some essential, some not). 
         The sum of ESSENTIAL items must be <= Total Budget. 
         Total Budget should be between $50 and $500.
@@ -191,8 +196,8 @@ async function tryGenerateWithModel(
         Return ONLY valid JSON:
         {"type":"budget_puzzle","scenario":"You are planning X...","totalBudget":100,"items":[{"name":"Item A","cost":20,"essential":true},{"name":"Luxury Item","cost":50,"essential":false}],"correctEssentials":["Item A"]}`;
     } else {
-        // Trivia
-        prompt = `Generate a UNIQUE and RANDOM trivia question about ${category}.
+      // Trivia
+      prompt = `Generate a UNIQUE and RANDOM trivia question about ${category}.
         Difficulty Level: ${difficulty.toUpperCase()} (${levelDesc[difficulty]}).
         Do not repeat common questions.
         Return ONLY valid JSON with no markdown, no backticks, no extra text:
@@ -217,16 +222,16 @@ async function tryGenerateWithModel(
 
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
+
     if (!text) {
       return { success: false, status: 500 };
     }
 
     const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
     const questionData = JSON.parse(jsonStr) as MiniGame;
-    
+
     return { success: true, data: questionData };
-    
+
   } catch (err) {
     console.error(`Error with model ${model}:`, err);
     return { success: false, status: 500 };
